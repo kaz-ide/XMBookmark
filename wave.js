@@ -1,6 +1,6 @@
 /**
- * PS3 Dynamic Silk Wave & Stardust Particle Visualizer
- * Accurately replicates the PS3 Firmware 3.00 aesthetic with multi-layered bezier waves and twinkling particles.
+ * PS3 Dynamic Silk Wave & Stardust Particle Visualizer (Office & Low-Power Optimized)
+ * Accurately replicates the PS3 Firmware 3.00 aesthetic with multi-layered bezier waves.
  */
 class XMBWaveEngine {
   constructor(canvasId) {
@@ -13,6 +13,14 @@ class XMBWaveEngine {
     this.time = 0;
     this.speed = 0.008;
     this.impulse = 0; // ナビゲーション移動時の波の揺らめきリアクション
+
+    // ★軽量化1: 30fps フレームレート制御用のタイマー変数
+    this.targetFps = 30;
+    this.interval = 1000 / this.targetFps;
+    this.lastTime = 0;
+
+    // ★軽量化2: ウィンドウ非アクティブ時の完全休止フラグ
+    this.isPaused = false;
 
     // カラーパレット
     this.currentTheme = 'purple';
@@ -97,8 +105,8 @@ class XMBWaveEngine {
       }
     };
 
-    // スターダスト・パーティクル
-    this.particleCount = 75;
+    // ★軽量化3: パーティクル数を 75 → 35 に削減（見た目の星空感を保ちつつ描画コール半減）
+    this.particleCount = 35;
     this.particles = [];
 
     // 波の定義（5本の重なり合う半透明シルクリボン）
@@ -119,8 +127,17 @@ class XMBWaveEngine {
   init() {
     this.resize();
     window.addEventListener('resize', () => this.resize());
+
+    // ウィンドウが背面に回ったら描画停止、前面復帰で再開（裏でのCPU使用率を0%にする）
+    window.addEventListener('blur', () => { this.isPaused = true; });
+    window.addEventListener('focus', () => { 
+      this.isPaused = false; 
+      this.lastTime = performance.now();
+      requestAnimationFrame((t) => this.animate(t));
+    });
+
     this.createParticles();
-    this.animate();
+    requestAnimationFrame((t) => this.animate(t));
   }
 
   resize() {
@@ -136,9 +153,9 @@ class XMBWaveEngine {
       this.particles.push({
         x: Math.random() * this.width,
         y: Math.random() * this.height,
-        radius: Math.random() * 1.8 + 0.6,
+        radius: Math.random() * 1.6 + 0.6,
         alpha: Math.random() * 0.7 + 0.2,
-        twinkleSpeed: Math.random() * 0.03 + 0.01,
+        twinkleSpeed: Math.random() * 0.04 + 0.015,
         twinklePhase: Math.random() * Math.PI * 2,
         vx: (Math.random() - 0.5) * 0.25,
         vy: -Math.random() * 0.35 - 0.05
@@ -147,7 +164,7 @@ class XMBWaveEngine {
   }
 
   setParticleCount(count) {
-    this.particleCount = Math.max(0, Math.min(200, count));
+    this.particleCount = Math.max(0, Math.min(100, count));
     this.createParticles();
   }
 
@@ -159,16 +176,24 @@ class XMBWaveEngine {
   }
 
   triggerImpulse() {
-    // ナビゲーション入力時にウェーブを少し跳ねさせる
     this.impulse = Math.min(this.impulse + 22, 45);
   }
 
-  animate() {
-    requestAnimationFrame(() => this.animate());
+  animate(currentTime) {
+    if (this.isPaused) return;
 
-    this.time += this.speed;
+    requestAnimationFrame((t) => this.animate(t));
+
+    // 30fps デルタタイム判定
+    const delta = currentTime - this.lastTime;
+    if (delta < this.interval) return;
+
+    this.lastTime = currentTime - (delta % this.interval);
+
+    // 30fps 間引きに合わせて移動速度をスケール補正
+    this.time += this.speed * 1.8;
     if (this.impulse > 0.01) {
-      this.impulse *= 0.94; // 減衰
+      this.impulse *= 0.90;
     } else {
       this.impulse = 0;
     }
@@ -184,7 +209,7 @@ class XMBWaveEngine {
 
     ctx.clearRect(0, 0, w, h);
 
-    // 1. 背景グラデーション（カスタム壁紙時は透過させる）
+    // 1. 背景グラデーション
     if (!this.hasCustomWallpaper) {
       const bgGrad = ctx.createRadialGradient(
         w * 0.65, h * 0.38, 50,
@@ -198,19 +223,18 @@ class XMBWaveEngine {
       ctx.fillRect(0, 0, w, h);
     }
 
-    // 壁紙設定時にウェーブを重ねない設定ならスキップ
     if (this.hasCustomWallpaper && !this.showWavesOnCustomWallpaper) {
       return;
     }
 
     // 2. スターダスト・パーティクルの描画
+    // ★軽量化4: 内蔵GPUで激重になる shadowBlur（全ピクセルのボカシ畳み込み）を完全排除
     ctx.save();
     for (let p of this.particles) {
-      p.x += p.vx;
-      p.y += p.vy;
-      p.twinklePhase += p.twinkleSpeed;
+      p.x += p.vx * 1.8;
+      p.y += p.vy * 1.8;
+      p.twinklePhase += p.twinkleSpeed * 1.8;
 
-      // 画面ループ
       if (p.x < 0) p.x = w;
       if (p.x > w) p.x = 0;
       if (p.y < 0) p.y = h;
@@ -220,18 +244,16 @@ class XMBWaveEngine {
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(${theme.particleColor}, ${currentAlpha})`;
-      ctx.shadowBlur = p.radius * 4;
-      ctx.shadowColor = `rgba(${theme.particleColor}, ${currentAlpha})`;
       ctx.fill();
     }
     ctx.restore();
 
     // 3. PS3 シルクリボン・ウェーブの描画
-    // サイン波を滑らかなベジェ曲線で描画し、波と波が交差する美しいリボンを作る
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
 
-    const step = 28; // 横分割ステップ
+    // ★軽量化5: 横ステップを 28 → 48 に広げ、三角関数計算とパス描画回数を約40%削減
+    const step = 48;
 
     this.waveLayers.forEach((layer, layerIdx) => {
       const baseY = h * layer.yRatio;
@@ -240,7 +262,6 @@ class XMBWaveEngine {
 
       ctx.beginPath();
 
-      // 波の上端ライン
       let points = [];
       for (let x = -step; x <= w + step * 2; x += step) {
         const y = baseY +
@@ -256,12 +277,10 @@ class XMBWaveEngine {
         ctx.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
       }
 
-      // 画面下部まで帯状に閉じる
       ctx.lineTo(w + step, h + 100);
       ctx.lineTo(-step, h + 100);
       ctx.closePath();
 
-      // 半透明グラデーション塗りつぶし
       const grad = ctx.createLinearGradient(0, baseY - amp, 0, baseY + amp * 2.2);
       grad.addColorStop(0, waveColor);
       grad.addColorStop(0.5, waveColor.replace(/[\d\.]+\)$/, '0.04)'));
@@ -270,7 +289,7 @@ class XMBWaveEngine {
       ctx.fillStyle = grad;
       ctx.fill();
 
-      // 鮮明な光沢エッジライン（リボンの稜線）
+      // エッジ光沢ライン（ベジェ曲線で補間しているため step=48 でも滑らかさはそのまま維持）
       ctx.beginPath();
       ctx.moveTo(points[0].x, points[0].y);
       for (let i = 1; i < points.length - 1; i++) {
@@ -278,7 +297,7 @@ class XMBWaveEngine {
         const yc = (points[i].y + points[i + 1].y) / 2;
         ctx.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
       }
-      ctx.lineWidth = 1.4;
+      ctx.lineWidth = 1.2;
       ctx.strokeStyle = `rgba(255, 255, 255, ${0.28 + (layerIdx === 3 ? 0.35 : 0)})`;
       ctx.stroke();
     });
